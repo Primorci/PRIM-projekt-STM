@@ -22,7 +22,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "usbd_cdc_if.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -66,6 +67,64 @@ static void MX_SPI1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void LIS3DSH_Init() {
+//    uint8_t config[2];
+//
+//    // Enable X, Y, Z axes and set data rate to 100 Hz
+//    config[0] = 0x20; // CTRL_REG4
+//    config[1] = 0x57; // Enable axes, ODR = 100 Hz
+//    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET); // CS low
+//    HAL_SPI_Transmit(&hspi1, config, 2, HAL_MAX_DELAY);
+//    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);   // CS high
+	uint8_t config[2];
+
+	// CTRL_REG4: Enable all axes, ODR = 100 Hz
+	config[0] = 0x20;
+	config[1] = 0x57; // X, Y, Z enabled + ODR = 100 Hz
+	HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET); // CS low
+	HAL_SPI_Transmit(&hspi1, config, 2, HAL_MAX_DELAY);
+	HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);   // CS high
+
+}
+
+uint8_t LIS3DSH_ReadWhoAmI() {
+    uint8_t reg_addr = 0x0F | 0x80; // WHO_AM_I register with Read flag
+    uint8_t who_am_i;
+
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET); // CS low
+    HAL_SPI_Transmit(&hspi1, &reg_addr, 1, HAL_MAX_DELAY);
+    HAL_SPI_Receive(&hspi1, &who_am_i, 1, HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);   // CS high
+
+    return who_am_i;
+}
+
+void LIS3DSH_ReadAcceleration(int16_t *x, int16_t *y, int16_t *z) {
+    uint8_t reg_addr = 0x28 | 0x80 | 0x40; // Start at OUT_X_L, auto-increment
+    uint8_t data[6]; // 6 bytes for X, Y, Z
+
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET); // CS low
+    HAL_SPI_Transmit(&hspi1, &reg_addr, 1, HAL_MAX_DELAY); // Send register address
+    HAL_SPI_Receive(&hspi1, data, 6, HAL_MAX_DELAY);      // Receive 6 bytes
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);    // CS high
+
+    // Combine MSB and LSB for each axis
+    *x = (int16_t)((data[1] << 8) | data[0]); // X-axis
+    *y = (int16_t)((data[3] << 8) | data[2]); // Y-axis
+    *z = (int16_t)((data[5] << 8) | data[4]); // Z-axis
+}
+
+float convert_to_g(int16_t raw_value, int scale) {
+    switch (scale) {
+        case 2: return raw_value / 16384.0f;
+        case 4: return raw_value / 8192.0f;
+        case 6: return raw_value / 5461.0f;
+        case 8: return raw_value / 4096.0f;
+        case 16: return raw_value / 2048.0f;
+        default: return 0.0f; // Invalid scale
+    }
+}
+
 
 /* USER CODE END 0 */
 
@@ -107,13 +166,52 @@ int main(void)
   MX_SPI1_Init();
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
-
+  LIS3DSH_Init();
+  uint8_t who_am_i = LIS3DSH_ReadWhoAmI();
+  /* Check the WHO_AM_I response (expected value is 0x3F for LIS3DSH) */
+//  if (who_am_i != 0x3F) {
+//      Error_Handler();
+//  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  uint8_t usbBuff[13]; // rezerviran prostor za podatke katere posljemo preko USB
+  usbBuff[0] = 'H';
+  usbBuff[1] = 'e';
+  usbBuff[2] = 'l';
+  usbBuff[3] = 'l';
+  usbBuff[4] = 'o';
+  usbBuff[5] = ' ';
+  usbBuff[6] = 0x77;   // w
+  usbBuff[7] = 0x6f;   // o
+  usbBuff[8] = 0x72;   // r
+  usbBuff[9] = 0x6c;   // l
+  usbBuff[10] = 0x64;  // d
+  usbBuff[11] = 0x0a;  // LF
+  usbBuff[12] = 0x0d;  // CR
+
+  int16_t x, y, z;
+  float x_g, y_g, z_g;
+  uint8_t UserTxBufferFS[2048];
+
   while (1)
   {
+//	  CDC_Transmit_FS((uint8_t*)&usbBuff, 13);
+//	  HAL_Delay(1000);
+	  LIS3DSH_ReadAcceleration(&x, &y, &z);
+
+	 // Convert raw data to g-units (assuming ±2g scale here)
+	 x_g = convert_to_g(x, 2);
+	 y_g = convert_to_g(y, 2);
+	 z_g = convert_to_g(z, 2);
+
+	 // Use the data (e.g., print or process it)
+	 snprintf((char *)UserTxBufferFS,APP_TX_DATA_SIZE,"X: %.2f g, Y: %.2f g, Z: %.2f g\r",x_g, y_g, z_g);
+	 CDC_Transmit_FS(UserTxBufferFS, strlen((char *)UserTxBufferFS));
+
+	 HAL_Delay(100); // Delay for readability
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -308,8 +406,8 @@ static void MX_SPI1_Init(void)
   hspi1.Init.Mode = SPI_MODE_MASTER;
   hspi1.Init.Direction = SPI_DIRECTION_2LINES;
   hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
+  hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
   hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
@@ -346,7 +444,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(CS_I2C_SPI_GPIO_Port, CS_I2C_SPI_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(OTG_FS_PowerSwitchOn_GPIO_Port, OTG_FS_PowerSwitchOn_Pin, GPIO_PIN_SET);
@@ -361,12 +459,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(DATA_Ready_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : CS_I2C_SPI_Pin */
-  GPIO_InitStruct.Pin = CS_I2C_SPI_Pin;
+  /*Configure GPIO pin : PE3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_3;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(CS_I2C_SPI_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /*Configure GPIO pins : INT1_Pin INT2_Pin MEMS_INT2_Pin */
   GPIO_InitStruct.Pin = INT1_Pin|INT2_Pin|MEMS_INT2_Pin;
