@@ -63,69 +63,70 @@ static void MX_I2S3_Init(void);
 static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 
+uint8_t i2c1_pisiRegister(uint8_t, uint8_t, uint8_t);
+void i2c1_beriRegistre(uint8_t, uint8_t, uint8_t*, uint8_t);
+void initOrientation(void);
+
+uint8_t spi1_beriRegister(uint8_t);
+void spi1_beriRegistre(uint8_t, uint8_t*, uint8_t);
+void spi1_pisiRegister(uint8_t, uint8_t);
+void initGyro(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void LIS3DSH_Init() {
-//    uint8_t config[2];
-//
-//    // Enable X, Y, Z axes and set data rate to 100 Hz
-//    config[0] = 0x20; // CTRL_REG4
-//    config[1] = 0x57; // Enable axes, ODR = 100 Hz
-//    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET); // CS low
-//    HAL_SPI_Transmit(&hspi1, config, 2, HAL_MAX_DELAY);
-//    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);   // CS high
-	uint8_t config[2];
-
-	// CTRL_REG4: Enable all axes, ODR = 100 Hz
-	config[0] = 0x20;
-	config[1] = 0x57; // X, Y, Z enabled + ODR = 100 Hz
-	HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET); // CS low
-	HAL_SPI_Transmit(&hspi1, config, 2, HAL_MAX_DELAY);
-	HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);   // CS high
-
+uint8_t i2c1_pisiRegister(uint8_t naprava, uint8_t reg, uint8_t podatek) {
+    naprava <<= 1;
+    return HAL_I2C_Mem_Write(&hi2c1, naprava, reg, I2C_MEMADD_SIZE_8BIT, &podatek, 1, 10);
 }
 
-uint8_t LIS3DSH_ReadWhoAmI() {
-    uint8_t reg_addr = 0x0F | 0x80; // WHO_AM_I register with Read flag
-    uint8_t who_am_i;
-
-    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET); // CS low
-    HAL_SPI_Transmit(&hspi1, &reg_addr, 1, HAL_MAX_DELAY);
-    HAL_SPI_Receive(&hspi1, &who_am_i, 1, HAL_MAX_DELAY);
-    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);   // CS high
-
-    return who_am_i;
+void i2c1_beriRegistre(uint8_t naprava, uint8_t reg, uint8_t* podatek, uint8_t dolzina) {
+    if ((dolzina>1)&&(naprava==0x19))  // ce je naprava 0x19 moramo postaviti ta bit, ce zelimo brati vec zlogov
+        reg |= 0x80;
+    naprava <<= 1;
+    HAL_I2C_Mem_Read(&hi2c1, naprava, reg, I2C_MEMADD_SIZE_8BIT, podatek, dolzina, dolzina);
 }
 
-void LIS3DSH_ReadAcceleration(int16_t *x, int16_t *y, int16_t *z) {
-    uint8_t reg_addr = 0x28 | 0x80 | 0x40; // Start at OUT_X_L, auto-increment
-    uint8_t data[6]; // 6 bytes for X, Y, Z
-
-    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET); // CS low
-    HAL_SPI_Transmit(&hspi1, &reg_addr, 1, HAL_MAX_DELAY); // Send register address
-    HAL_SPI_Receive(&hspi1, data, 6, HAL_MAX_DELAY);      // Receive 6 bytes
-    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);    // CS high
-
-    // Combine MSB and LSB for each axis
-    *x = (int16_t)((data[1] << 8) | data[0]); // X-axis
-    *y = (int16_t)((data[3] << 8) | data[2]); // Y-axis
-    *z = (int16_t)((data[5] << 8) | data[4]); // Z-axis
+void initOrientation() { // ne pozabit klicati te funkcije
+    // inicializiraj pospeskometer
+    i2c1_pisiRegister(0x19, 0x20, 0x27);  // zbudi pospeskometer in omogoci osi
+    i2c1_pisiRegister(0x19, 0x23, 0x88);  // nastavi posodobitev samo ko se prebere vrednost ter visoko locljivost
 }
 
-float convert_to_g(int16_t raw_value, int scale) {
-    switch (scale) {
-        case 2: return raw_value / 16384.0f;
-        case 4: return raw_value / 8192.0f;
-        case 6: return raw_value / 5461.0f;
-        case 8: return raw_value / 4096.0f;
-        case 16: return raw_value / 2048.0f;
-        default: return 0.0f; // Invalid scale
+uint8_t spi1_beriRegister(uint8_t reg) {
+    uint16_t buf_out, buf_in;
+    reg |= 0x80; // najpomembnejsi bit na 1
+    buf_out = reg; // little endian, se postavi na pravo mesto ....
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
+    HAL_SPI_TransmitReceive(&hspi1, (uint8_t*)&buf_out, (uint8_t*)&buf_in, 2, 2); // blocking posiljanje ....
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
+    return buf_in >> 8; // little endian...
+}
+
+void spi1_pisiRegister(uint8_t reg, uint8_t vrednost) {
+    uint16_t buf_out;
+    buf_out = reg | (vrednost<<8); // little endian, se postavi na pravo mesto ....
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
+    HAL_SPI_Transmit(&hspi1, (uint8_t*)&buf_out, 2, 2); // blocking posiljanje ....
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
+}
+
+void spi1_beriRegistre(uint8_t reg, uint8_t* buffer, uint8_t velikost) {
+    reg |= 0xC0; // najpomembnejsa bita na 1
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
+    HAL_SPI_Transmit(&hspi1, &reg, 1, 10); // blocking posiljanje....
+    HAL_SPI_Receive(&hspi1,  buffer, velikost, velikost); // blocking posiljanje....
+    HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
+}
+
+void initGyro() { // ne pozabit klicat te funkcije
+    // preverimo ali smo "poklicali" pravi senzor
+    uint8_t cip = spi1_beriRegister(0x0F);
+    if (cip!=0xD4 && cip!=0xD3) {
+        for (;;);
     }
+    spi1_pisiRegister(0x20, 0x0F); // zbudi ziroskop in omogoci osi
 }
-
-
 /* USER CODE END 0 */
 
 /**
@@ -166,52 +167,40 @@ int main(void)
   MX_SPI1_Init();
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
-  LIS3DSH_Init();
-  uint8_t who_am_i = LIS3DSH_ReadWhoAmI();
-  /* Check the WHO_AM_I response (expected value is 0x3F for LIS3DSH) */
-//  if (who_am_i != 0x3F) {
-//      Error_Handler();
-//  }
+  __HAL_SPI_ENABLE(&hspi1);
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET); // CS postavimo na 1
+  initGyro();
+
+  initOrientation();
+  __HAL_I2C_ENABLE(&hi2c1);
+
+
+  int16_t meritev[4];
+  meritev[0] = 0xaaab;// glava za zaznamek zacetek paketa
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  uint8_t usbBuff[13]; // rezerviran prostor za podatke katere posljemo preko USB
-  usbBuff[0] = 'H';
-  usbBuff[1] = 'e';
-  usbBuff[2] = 'l';
-  usbBuff[3] = 'l';
-  usbBuff[4] = 'o';
-  usbBuff[5] = ' ';
-  usbBuff[6] = 0x77;   // w
-  usbBuff[7] = 0x6f;   // o
-  usbBuff[8] = 0x72;   // r
-  usbBuff[9] = 0x6c;   // l
-  usbBuff[10] = 0x64;  // d
-  usbBuff[11] = 0x0a;  // LF
-  usbBuff[12] = 0x0d;  // CR
-
-  int16_t x, y, z;
-  float x_g, y_g, z_g;
-  uint8_t UserTxBufferFS[2048];
-
   while (1)
   {
-//	  CDC_Transmit_FS((uint8_t*)&usbBuff, 13);
-//	  HAL_Delay(1000);
-	  LIS3DSH_ReadAcceleration(&x, &y, &z);
+	HAL_Delay(100);
 
-	 // Convert raw data to g-units (assuming ±2g scale here)
-	 x_g = convert_to_g(x, 2);
-	 y_g = convert_to_g(y, 2);
-	 z_g = convert_to_g(z, 2);
+	i2c1_beriRegistre(0x19, 0x28,(uint8_t*)&meritev[1], 6);
+	if (CDC_Transmit_FS((uint8_t*)&meritev, 8) != USBD_OK) {
+	    // Handle transmission error
+	    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_14); // Toggle red LED to indicate an issue
+	}
+//	CDC_Transmit_FS((uint8_t*)&meritev, 8);
 
-	 // Use the data (e.g., print or process it)
-	 snprintf((char *)UserTxBufferFS,APP_TX_DATA_SIZE,"X: %.2f g, Y: %.2f g, Z: %.2f g\r",x_g, y_g, z_g);
-	 CDC_Transmit_FS(UserTxBufferFS, strlen((char *)UserTxBufferFS));
-
-	 HAL_Delay(100); // Delay for readability
-
+	HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);
+//	  HAL_Delay(100);
+//
+//	  spi1_beriRegistre(0x28, (uint8_t*)&meritev[1], 6);
+//
+//	  // POZOR: tukaj �?akamo, dokler na PC-ju podatkov ne preberemo
+//	  while(CDC_Transmit_FS((uint8_t*)&meritev, 8));
+//
+//	  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -300,8 +289,8 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
-  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.ClockSpeed = 400000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_16_9;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -409,7 +398,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
   hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -463,7 +452,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pin = GPIO_PIN_3;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /*Configure GPIO pins : INT1_Pin INT2_Pin MEMS_INT2_Pin */
